@@ -60,11 +60,35 @@ let webVersion = "user";
 let contType = "div";
 let contType2 = "img";
 let contType3 = "input";
+
+// Ensure Cloudinary URLs include automatic format/quality flags for better delivery
+function normalizeCloudinaryUrl(url) {
+  try {
+    if (!url || typeof url !== "string") return url;
+    if (!url.toLowerCase().includes("cloudinary")) return url;
+    const uploadToken = "/upload/";
+    const idx = url.indexOf(uploadToken);
+    if (idx === -1) return url;
+    // if already contains f_auto and q_auto, return as-is
+    if (url.includes("f_auto") && url.includes("q_auto")) return url;
+    // insert transformation right after /upload/
+    const before = url.slice(0, idx + uploadToken.length);
+    const after = url.slice(idx + uploadToken.length);
+    return before + "f_auto,q_auto/" + after;
+  } catch (e) {
+    return url;
+  }
+}
 // --- Authentication Logic ---
 loginButton.addEventListener("click", () => {
-  const email = emailInput.value;
-  const password = passwordInput.value;
+  const email = String(emailInput.value || "").trim();
+  const password = String(passwordInput.value || "").trim();
   loginError.textContent = ""; // Clear previous errors
+
+  if (!email || !password) {
+    showToast("Please enter both email and password.", "error");
+    return;
+  }
 
   signInWithEmailAndPassword(auth, email, password)
     .then(userCredential => {
@@ -99,6 +123,14 @@ onAuthStateChanged(auth, user => {
     removeOverLay();
     contType = "input";
     contType2 = "input";
+    // disable login when already signed in
+    try {
+      if (loginButton) {
+        loginButton.disabled = true;
+      }
+    } catch (e) {
+      console.error("Error disabling login button:", e);
+    }
   } else {
     // User is signed out
     //loginSection.classList.remove("hidden");
@@ -108,6 +140,14 @@ onAuthStateChanged(auth, user => {
     if (unsubscribe) {
       unsubscribe(); // Stop listening to data changes when logged out
     }
+    // ensure login button is enabled when signed out
+    try {
+      if (loginButton) {
+        loginButton.disabled = false;
+      }
+    } catch (e) {
+      console.error("Error enabling login button:", e);
+    }
   }
 });
 
@@ -115,6 +155,101 @@ let productsData = [];
 let mangementData = [];
 let eventData = [];
 let newEventData = [];
+
+// Helper: generate compact alphanumeric id (letters+numbers, no spaces)
+function generateId(length = 8) {
+  const chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+  let result = "";
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+// Count words helper (used for 200-word limit)s
+function countWords(str) {
+  if (!str) return 0;
+  return String(str).trim().split(/\s+/).filter(Boolean).length;
+}
+
+function isValidUrl(value) {
+  if (!value) return false;
+  try {
+    new URL(value);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function validateEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+}
+
+function showFormError(message) {
+  showToast(message, "error");
+}
+
+function validateRequiredFields(fields) {
+  for (const field of fields) {
+    const el = field.el;
+    if (!el) continue;
+    const value = String(el.value || "").trim();
+    if (!value) {
+      showFormError(field.name + " is required.");
+      if (typeof el.focus === "function") el.focus();
+      return false;
+    }
+    if (field.validator && !field.validator(value)) {
+      showFormError(field.invalidMessage || `Invalid ${field.name.toLowerCase()}.`);
+      if (typeof el.focus === "function") el.focus();
+      return false;
+    }
+  }
+  return true;
+}
+
+//special hash for each product to make QR reader
+// 2. Check the URL hash as soon as the page loads
+
+// Normalize product ids to ensure uniqueness and alphanumeric-only ids
+function ensureUniqueProductIds(arr) {
+  if (!Array.isArray(arr)) return arr;
+  const seen = new Set();
+  return arr.map(item => {
+    if (!item) return item;
+    // If id missing or already used, generate a new one
+    let id = item.id ? String(item.id).replace(/\s+/g, "") : "";
+    if (!id || seen.has(id)) {
+      let newId;
+      do {
+        newId = generateId(10);
+      } while (seen.has(newId));
+      id = newId;
+    }
+    seen.add(id);
+    return { ...item, id };
+  });
+}
+
+function ensureUniqueManagementIds(arr) {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set();
+  return arr.map(item => {
+    if (!item) return item;
+    let id = item.id ? String(item.id).trim() : "";
+    if (!id || seen.has(id)) {
+      let newId;
+      do {
+        newId = generateId(10);
+      } while (seen.has(newId));
+      id = newId;
+    }
+    seen.add(id);
+    return { ...item, id };
+  });
+}
 
 let data;
 function loadAndDisplayData() {
@@ -129,9 +264,9 @@ function loadAndDisplayData() {
       if (doc.exists()) {
         data = doc.data();
 
-        // Assign to comp.js arrays
-        productsData = data.products || [];
-        mangementData = data.management || [];
+        // Assign to comp.js arrays and ensure unique alphanumeric ids for products
+        productsData = ensureUniqueProductIds(data.products || []);
+        mangementData = ensureUniqueManagementIds(data.management || []);
         eventData = data.oldEvents || [];
         newEventData = data.newEvents || [];
 
@@ -176,6 +311,7 @@ window.saveData = async sectionKey => {
   } else if (sectionKey === "oldEvents") {
     dataToSave = eventData;
   } else if (sectionKey === "newEvents") {
+    console.log(selectedFilters)
     dataToSave = newEventData;
   } else if (sectionKey === "footer") {
     const footerTextarea = document.getElementById("Footer-json");
@@ -212,6 +348,166 @@ const conditionsButton = document.querySelector(".submitConditionButton");
 const conditionAddingForm = document.querySelector(".conditionAddingForm");
 const formContainer = document.querySelector(".forms-container");
 
+window.onload = () => {
+  formContainer.classList.contains("hidden") ? "" : formContainer.classList.add("hidden");
+}
+// ConditionV2 admin elements and helpers
+const conditionV2FormEl = document.querySelector(".conditionV2Form");
+const submitConditionV2Btn = document.querySelector(".submitConditionV2Button");
+const addImageBtn = document.querySelector(".addImageButton");
+
+function createCondV2ImageRow(url = "", alt = "") {
+  const row = document.createElement("div");
+  row.className = "condV2ImageRow";
+  const urlInput = document.createElement("input");
+  urlInput.type = "url";
+  urlInput.className = "condV2ImageUrl";
+  urlInput.placeholder = "Image URL (Cloudinary)";
+  urlInput.value = url;
+  const altInput = document.createElement("input");
+  altInput.type = "text";
+  altInput.className = "condV2ImageAlt";
+  altInput.placeholder = "Alt text (optional)";
+  altInput.value = alt;
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "removeImageButton";
+  removeBtn.textContent = "Remove";
+  row.appendChild(urlInput);
+  row.appendChild(altInput);
+  row.appendChild(removeBtn);
+  return row;
+}
+
+// Add image row handler
+if (addImageBtn && conditionV2FormEl) {
+  addImageBtn.addEventListener("click", () => {
+    const container = conditionV2FormEl.querySelector(".condV2Images");
+    if (!container) return;
+    const current = container.querySelectorAll(".condV2ImageRow").length;
+    if (current >= 10) {
+      showFormError("Maximum 10 images allowed.");
+      return;
+    }
+    container.appendChild(createCondV2ImageRow());
+  });
+}
+
+// Remove image row (event delegation)
+if (conditionV2FormEl) {
+  conditionV2FormEl.addEventListener("click", e => {
+    if (e.target && e.target.matches(".removeImageButton")) {
+      const row = e.target.closest(".condV2ImageRow");
+      if (row) row.remove();
+    }
+  });
+}
+
+function resetConditionV2Form() {
+  if (!conditionV2FormEl) return;
+  const name = conditionV2FormEl.querySelector(".condV2Name");
+  const date = conditionV2FormEl.querySelector(".condV2Date");
+  const text = conditionV2FormEl.querySelector(".condV2Text");
+  const images = conditionV2FormEl.querySelector(".condV2Images");
+  const pid = conditionV2FormEl.querySelector(".condV2ProductId");
+  if (name) name.value = "";
+  if (date) date.value = "";
+  if (text) text.value = "";
+  if (images) {
+    images.innerHTML = "";
+    images.appendChild(createCondV2ImageRow());
+  }
+  if (pid) pid.value = "";
+  const wc = conditionV2FormEl.querySelector(".condV2WordCount");
+  if (wc) wc.textContent = "0";
+}
+
+// Submit new Condition V2
+if (submitConditionV2Btn && conditionV2FormEl) {
+  submitConditionV2Btn.addEventListener("click", () => {
+    const productIdEl = conditionV2FormEl.querySelector(".condV2ProductId");
+    const productId = productIdEl ? productIdEl.value : null;
+    const nameEl = conditionV2FormEl.querySelector(".condV2Name");
+    const dateEl = conditionV2FormEl.querySelector(".condV2Date");
+    const textEl = conditionV2FormEl.querySelector(".condV2Text");
+    const imagesContainer = conditionV2FormEl.querySelector(".condV2Images");
+    if (!productId) {
+      showFormError("Product not selected. Please choose a product first.");
+      return;
+    }
+    const product = productsData.find(p => p.id == productId);
+    if (!product) {
+      showFormError("Product not found. Please reopen the condition form.");
+      return;
+    }
+    const name = nameEl ? nameEl.value.trim() : "";
+    const date = dateEl ? dateEl.value : "";
+    const text = textEl ? textEl.value.trim() : "";
+    const wordCount = countWords(text);
+    if (!name) {
+      showFormError("Condition name is required.");
+      return;
+    }
+    if (wordCount > 200) {
+      showFormError("Text must be 200 words or fewer.");
+      return;
+    }
+    // collect images
+    const imageRows = imagesContainer
+      ? Array.from(imagesContainer.querySelectorAll(".condV2ImageRow"))
+      : [];
+    const images = imageRows
+      .map(r => {
+        const url = (r.querySelector(".condV2ImageUrl") || {}).value || "";
+        const alt = (r.querySelector(".condV2ImageAlt") || {}).value || "";
+        return { url: url.trim(), alt: alt.trim() };
+      })
+      .filter(i => i.url);
+    if (images.length < 1 || images.length > 10) {
+      showFormError("Please provide between 1 and 10 images.");
+      return;
+    }
+    for (const img of images) {
+      if (!isValidUrl(img.url)) {
+        showFormError("Please use valid image URLs for all condition images.");
+        return;
+      }
+    }
+
+    // normalize urls
+    images.forEach(img => {
+      img.url = normalizeCloudinaryUrl(img.url);
+    });
+
+    const newItem = {
+      id: generateId(10),
+      name,
+      date,
+      text,
+      images
+    };
+
+    product.conditionsV2 = product.conditionsV2 || [];
+    product.conditionsV2.push(newItem);
+    // update UI
+    resetConditionV2Form();
+    conditionV2FormEl.classList.add("hidden");
+    formContainer.classList.add("hidden");
+    renderProducts();
+  });
+}
+
+// live word count for condV2 text
+if (conditionV2FormEl) {
+  const textEl = conditionV2FormEl.querySelector(".condV2Text");
+  const wcEl = conditionV2FormEl.querySelector(".condV2WordCount");
+  if (textEl && wcEl) {
+    textEl.addEventListener("input", () => {
+      wcEl.textContent = countWords(textEl.value);
+    });
+  }
+}
+
 const closeForm = form => {
   if (!form) return;
   form.classList.add("hidden");
@@ -234,57 +530,73 @@ formContainer.addEventListener("click", event => {
 
 const saveProductData = (saveType, editedProductId) => {
   console.log(saveType, editedProductId);
-  let productTitle = document.querySelector(".productTitle").value;
-  let productType = document.querySelector(".productType").value;
-  let productImage = document.querySelector(".productImage").value;
-  let productDesc = document.querySelector(".productDescription").value;
-  let productLongDesc = document.querySelector(".productLongDescription").value;
-  let productMainImage = document.querySelector(".productMainImage").value;
-  let newProductFilter = document.querySelector(".newProduct").checked;
+  const productTitle = String(document.querySelector(".productTitle").value || "").trim();
+  const productType = String(document.querySelector(".productType").value || "").trim();
+  const productImage = String(document.querySelector(".productMainImage").value || "").trim();
+  const productDesc = String(document.querySelector(".productDescription").value || "").trim();
+  const productLongDesc = String(document.querySelector(".productLongDescription").value || "").trim();
+  const productMainImage = String(document.querySelector(".productImage").value || "").trim();
+  const newProductFilter = document.querySelector(".newProduct").checked;
+
   if (saveType === "add") {
-    let product = {
+    if (!productTitle || !productType || !productImage || !productDesc || !productMainImage) {
+      showFormError("Please fill all required product fields before saving.");
+      return false;
+    }
+    if (!isValidUrl(productImage) || !isValidUrl(productMainImage)) {
+      showFormError("Please enter valid URLs for product images.");
+      return false;
+    }
+
+    const product = {
       title: productTitle,
-      prodImage: productMainImage,
+      prodImage: normalizeCloudinaryUrl(productMainImage),
       longDesc: productLongDesc,
       des: productDesc,
       type: productType,
       new: newProductFilter,
-      image: productImage,
+      image: normalizeCloudinaryUrl(productImage),
       conditions: [],
-      id: productsData.length + 1
+      id: generateId(10)
     };
     productsData = [...productsData, product];
     renderProducts();
+    return true;
   } else if (saveType === "edit") {
-    addProductForm.classList.add("hidden");
+    if (!editedProductId) {
+      showFormError("Cannot save changes without a selected product.");
+      return false;
+    }
     productsData = productsData.map(product => {
       if (product.id == editedProductId) {
         return {
           ...product,
           title: productTitle || product.title,
-          prodImage: productMainImage || product.image,
+          prodImage: productMainImage ? normalizeCloudinaryUrl(productMainImage) : product.prodImage,
           longDesc: productLongDesc || product.longDesc,
           des: productDesc || product.des,
           type: productType || product.type,
-          new: newProductFilter || product.new,
-          image: productImage || product.image,
+          new: newProductFilter ,
+          image: productImage ? normalizeCloudinaryUrl(productImage) : product.image,
           conditions: product.conditions,
           id: product.id
         };
       }
       return product;
     });
-    console.log(productsData);
     renderProducts();
+    return true;
   }
+  return false;
 };
 
 const saveButton = document.querySelector(".submitProductButton");
 saveButton.addEventListener("click", () => {
-  saveProductData("add");
-  productAddingForm.classList.add("hidden");
-  editSaveButton.classList.add("hidden");
-  formContainer.classList.add("hidden");
+  if (saveProductData("add")) {
+    productAddingForm.classList.add("hidden");
+    editSaveButton.classList.add("hidden");
+    formContainer.classList.add("hidden");
+  }
 });
 //Adding a product
 //selecting the existing buttons that adds a button, it is not ID based
@@ -297,33 +609,42 @@ openFormButton.addEventListener("click", () => {
 });
 const editSaveButton = document.querySelector(".editProductButton");
 editSaveButton.addEventListener("click", () => {
-  saveProductData("edit", editSaveButton.getAttribute("data-edit-id"));
-  productAddingForm.classList.add("hidden");
-  formContainer.classList.add("hidden");
+  if (saveProductData("edit", editSaveButton.getAttribute("data-edit-id"))) {
+    productAddingForm.classList.add("hidden");
+    formContainer.classList.add("hidden");
+  }
 });
 const submitConditionButton = document.querySelector(".submitConditionButton");
 submitConditionButton.addEventListener("click", () => {
-  let condName = document.querySelector(".condName").value;
-  let conditionDesc = document.querySelector(".conditionDesc").value;
-  let conditionDate = document.querySelector(".date").value;
-  let conditionImages = document.querySelectorAll(".conditionImage");
-  let imagesArray = [];
-  conditionImages.forEach(imageInput => {
-    imageInput.value
-      ? imagesArray.push(imageInput.value)
-      : console.log("no image");
-  });
-  let productId = submitConditionButton.getAttribute("data-product-id");
-  let product = productsData.find(p => p.id == productId);
-  let newCondition = {
-    condName: condName,
-    conditionDesc: conditionDesc,
-    date: conditionDate,
-    images: imagesArray
+  // New simplified condition format: { conditionName: string, conditionLink: string }
+  const condNameEl = document.querySelector(".condName");
+  const condLinkEl = document.querySelector(".conditionLink");
+  const condName = (condNameEl || {}).value || "";
+  const condLink = (condLinkEl || {}).value || "";
+
+  if (!condName.trim() || !condLink.trim()) {
+    showFormError("Please provide both condition name and link.");
+    return;
+  }
+  if (!isValidUrl(condLink.trim())) {
+    showFormError("Please enter a valid condition link URL.");
+    if (condLinkEl) condLinkEl.focus();
+    return;
+  }
+
+  const productId = submitConditionButton.getAttribute("data-product-id");
+  const product = productsData.find(p => p.id == productId);
+  if (!product) {
+    showFormError("Selected product not found. Please reopen the condition form.");
+    return;
+  }
+  product.conditions = product.conditions || [];
+  const newCondition = {
+    conditionName: condName.trim(),
+    conditionLink: condLink.trim()
   };
   product.conditions.push(newCondition);
   conditionAddingForm.classList.add("hidden");
-  console.log(productsData);
   renderProducts();
 });
 const fullView = document.querySelector(".fullView");
@@ -347,18 +668,22 @@ document.getElementById("members-page").appendChild(managementSection);
 const renderManagement = () => {
   managementList.innerHTML = "";
   mangementData.forEach(member => {
+    if (!member.id) {
+      member.id = generateId(10);
+    }
+
     const memberItem = document.createElement("li");
-    memberItem.textContent = `${member.name} (${member.tag ||
+    memberItem.textContent = `${member.title} ${member.name} (${member.tag ||
       "management member"})`;
     // store the tag on the DOM element for filtering
     memberItem.dataset.tag = member.tag || "management member";
     const deleteMemberButton = document.createElement("button");
     deleteMemberButton.type = "button";
     deleteMemberButton.textContent = "Delete";
-    deleteMemberButton.setAttribute("data-member-name", member.name);
+    deleteMemberButton.setAttribute("data-member-id", member.id);
     deleteMemberButton.addEventListener("click", () => {
-      const memberName = deleteMemberButton.getAttribute("data-member-name");
-      mangementData = mangementData.filter(m => m.name !== memberName);
+      const memberId = deleteMemberButton.getAttribute("data-member-id");
+      mangementData = mangementData.filter(m => m.id !== memberId);
       renderManagement();
     });
     memberItem.appendChild(deleteMemberButton);
@@ -389,11 +714,20 @@ saveMemberButton.addEventListener("click", () => {
     !memberImage ||
     !memberText
   ) {
-    alert("Please fill in all fields.");
+    showFormError("Please fill in all member fields before saving.");
+    return;
+  }
+  if (!validateEmail(memberEmail)) {
+    showFormError("Please enter a valid email address.");
+    return;
+  }
+  if (!isValidUrl(memberImage)) {
+    showFormError("Please enter a valid member image URL.");
     return;
   }
 
   const newMember = {
+    id: generateId(10),
     name: memberName,
     email: memberEmail,
     phone: memberPhone,
@@ -434,20 +768,275 @@ eventForm.innerHTML = `
   <input type="text" id="eventTitle" class="eventTitle" placeholder="Event Title" required>
   <label for="eventDesc">Description</label>
   <textarea id="eventDesc" class="eventDesc" placeholder="Event Description" required></textarea>
+  <div class="word-counter" data-for="eventDesc">0 / 70 words</div>
   <label for="eventDate">Date</label>
   <input type="text" id="eventDate" class="eventDate" placeholder="Event Date" required>
   <label for="eventShortDesc">Short Description</label>
   <input type="text" id="eventShortDesc" class="eventShortDesc" placeholder="Short Description" required>
+  <div class="word-counter" data-for="eventShortDesc">0 / 15 words</div>
   <label for="eventYear">Year</label>
   <input type="text" id="eventYear" class="eventYear" placeholder="Year" required>
-  <label for="eventSpez">Specialization</label>
-  <input type="text" id="eventSpez" class="eventSpez" placeholder="Specialization" required>
-  <label for="eventLink">Link</label>
-  <input type="text" id="eventLink" class="eventLink" placeholder="Link" required>
+  <label>Event Filters</label>
+  <div class="eventFiltersContainer"></div>
+  <div class="eventCustomFiltersContainer"></div>
+  <button type="button" class="addEventFilterInputButton">Add another filter</button>
+  <label>Event Images (1-10 URLs)</label>
+  <div class="eventImageUrlsContainer"></div>
+  <button type="button" class="addEventImageUrlButton">Add another image URL</button>
   <button type="button" class="saveEventButton">Save New Event</button>
   <button type="button" class="cancelFormButton">Back</button>
 `;
+
 eventForm.classList.add("hidden");
+
+function getEventFilters(event) {
+  if (!event) return [];
+  if (Array.isArray(event.filters) && event.filters.length > 0) {
+    return event.filters.map(f => String(f).trim()).filter(Boolean);
+  }
+  if (Array.isArray(event.filter) && event.filter.length > 0) {
+    return event.filter.map(f => String(f).trim()).filter(Boolean);
+  }
+  if (typeof event.filter === "string" && event.filter.trim()) {
+    return event.filter
+      .split(",")
+      .map(f => String(f).trim())
+      .filter(Boolean);
+  }
+  if (event.spez) {
+    return String(event.spez)
+      .split(",")
+      .map(f => String(f).trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function getUniqueEventFilters(events) {
+  const set = new Set();
+  (events || []).forEach(event => {
+    getEventFilters(event).forEach(filter => {
+      if (filter) set.add(filter);
+    });
+  });
+  return Array.from(set).sort();
+}
+
+function renderEventFilterCheckboxes() {
+  const container = eventForm.querySelector(".eventFiltersContainer");
+  if (!container) return;
+  const filters = getUniqueEventFilters(eventData);
+  container.innerHTML = "";
+  if (filters.length === 0) {
+    const info = document.createElement("p");
+    info.className = "eventFiltersInfo";
+    info.textContent = "No filters available yet. Add one below.";
+    container.appendChild(info);
+  }
+  filters.forEach(filter => {
+    const label = document.createElement("label");
+    label.className = "eventFilterLabel";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "eventFilterCheckbox";
+    checkbox.value = filter;
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(filter));
+    container.appendChild(label);
+  });
+}
+
+function addEventFilterOption(filterValue) {
+  const normalized = String(filterValue).trim();
+  if (!normalized) return;
+  const container = eventForm.querySelector(".eventFiltersContainer");
+  if (!container) return;
+  const existing = Array.from(container.querySelectorAll(".eventFilterCheckbox")).some(
+    cb => cb.value === normalized
+  );
+  if (existing) return;
+  const label = document.createElement("label");
+  label.className = "eventFilterLabel";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "eventFilterCheckbox";
+  checkbox.value = normalized;
+  checkbox.checked = true;
+  label.appendChild(checkbox);
+  label.appendChild(document.createTextNode(normalized));
+  container.appendChild(label);
+}
+
+function createCustomEventFilterInput(value = "") {
+  const row = document.createElement("div");
+  row.className = "eventCustomFilterRow";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.className = "eventCustomFilterInput";
+  input.placeholder = "Filter name";
+  input.value = value;
+  row.appendChild(input);
+  return row;
+}
+
+function addAnotherEventFilterInput(value = "") {
+  const container = eventForm.querySelector(".eventCustomFiltersContainer");
+  if (!container) return;
+  const row = createCustomEventFilterInput(value);
+  container.appendChild(row);
+  const input = row.querySelector(".eventCustomFilterInput");
+  if (input) input.focus();
+}
+
+function createEventImageUrlInput(value = "") {
+  const row = document.createElement("div");
+  row.className = "eventImageUrlRow";
+  const input = document.createElement("input");
+  input.type = "url";
+  input.className = "eventImageUrlInput";
+  input.placeholder = "Image URL";
+  input.value = value;
+  const removeButton = document.createElement("button");
+  removeButton.type = "button";
+  removeButton.className = "removeEventImageUrlButton";
+  removeButton.textContent = "Remove";
+  row.appendChild(input);
+  row.appendChild(removeButton);
+  return row;
+}
+
+function renderEventImageUrlInputs() {
+  const container = eventForm.querySelector(".eventImageUrlsContainer");
+  if (!container) return;
+  container.innerHTML = "";
+  addEventImageUrlInput("");
+}
+
+function addEventImageUrlInput(value = "") {
+  const container = eventForm.querySelector(".eventImageUrlsContainer");
+  if (!container) return;
+  const existingRows = container.querySelectorAll(".eventImageUrlRow").length;
+  if (existingRows >= 10) {
+    showFormError("You can add up to 10 images per event.");
+    return;
+  }
+  const row = createEventImageUrlInput(value);
+  container.appendChild(row);
+  const input = row.querySelector(".eventImageUrlInput");
+  if (input) input.focus();
+}
+
+function gatherEventImageUrls() {
+  const container = eventForm.querySelector(".eventImageUrlsContainer");
+  if (!container) return [];
+
+  const values = Array.from(container.querySelectorAll(".eventImageUrlInput"))
+    .map(input => String(input.value || "").trim())
+    .filter(Boolean);
+
+  if (values.length === 0) {
+    return [];
+  }
+
+  const invalidValue = values.find(value => !isValidUrl(value));
+  if (invalidValue) {
+    showFormError("Please enter valid image URLs.");
+    return null;
+  }
+
+  return values;
+}
+
+function gatherEventFormFilters() {
+  const selected = Array.from(eventForm.querySelectorAll(".eventFilterCheckbox:checked")).map(
+    checkbox => String(checkbox.value).trim()
+  );
+  const customFilterValues = Array.from(
+    eventForm.querySelectorAll(".eventCustomFilterInput")
+  )
+    .map(input => String(input.value || "").trim())
+    .filter(Boolean);
+
+  customFilterValues.forEach(value => {
+    if (!selected.includes(value)) {
+      selected.push(value);
+    }
+  });
+
+  return Array.from(new Set(selected)).filter(Boolean);
+}
+
+function activateEventFilterForm() {
+  renderEventFilterCheckboxes();
+  const customFilterContainer = eventForm.querySelector(".eventCustomFiltersContainer");
+  if (customFilterContainer) {
+    customFilterContainer.innerHTML = "";
+    addAnotherEventFilterInput("");
+  }
+}
+
+function clearEventFormFilters() {
+  const container = eventForm.querySelector(".eventFiltersContainer");
+  if (container) {
+    container.querySelectorAll(".eventFilterCheckbox").forEach(cb => (cb.checked = false));
+  }
+  const customFilterContainer = eventForm.querySelector(".eventCustomFiltersContainer");
+  if (customFilterContainer) {
+    customFilterContainer.innerHTML = "";
+    addAnotherEventFilterInput("");
+  }
+}
+
+const addEventFilterInputButton = eventForm.querySelector(".addEventFilterInputButton");
+if (addEventFilterInputButton) {
+  addEventFilterInputButton.addEventListener("click", () => {
+    addAnotherEventFilterInput("");
+  });
+}
+
+const addEventImageUrlButton = eventForm.querySelector(".addEventImageUrlButton");
+if (addEventImageUrlButton) {
+  addEventImageUrlButton.addEventListener("click", () => {
+    addEventImageUrlInput("");
+  });
+}
+
+if (eventForm) {
+  eventForm.addEventListener("click", event => {
+    const removeButton = event.target.closest(".removeEventImageUrlButton");
+    if (!removeButton) return;
+    const row = removeButton.closest(".eventImageUrlRow");
+    if (row) {
+      row.remove();
+    }
+  });
+}
+
+function updateEventWordCounters() {
+  const counters = eventForm.querySelectorAll(".word-counter");
+  counters.forEach(counter => {
+    const targetClass = counter.getAttribute("data-for");
+    const input = eventForm.querySelector(`.${targetClass}`);
+    if (!input) return;
+
+    const count = countWords(input.value);
+    const limit = targetClass === "eventDesc" ? 70 : 15;
+    const isOver = count > limit;
+    counter.textContent = `${count} / ${limit} words`;
+    counter.classList.toggle("over-limit", isOver);
+  });
+}
+
+if (eventForm) {
+  eventForm.addEventListener("input", event => {
+    if (
+      event.target.classList.contains("eventDesc") ||
+      event.target.classList.contains("eventShortDesc")
+    ) {
+      updateEventWordCounters();
+    }
+  });
+}
 
 const renderEvents = () => {
   eventList.innerHTML = "";
@@ -469,23 +1058,63 @@ const renderEvents = () => {
 };
 
 addEventButton.addEventListener("click", () => {
+  activateEventFilterForm();
+  renderEventImageUrlInputs();
   eventForm.classList.remove("hidden");
   formContainer.classList.remove("hidden");
 });
 
 const saveEventButton = eventForm.querySelector(".saveEventButton");
 saveEventButton.addEventListener("click", () => {
-  const eventTitle = eventForm.querySelector(".eventTitle").value.trim();
-  const eventDesc = eventForm.querySelector(".eventDesc").value.trim();
-  const eventDate = eventForm.querySelector(".eventDate").value.trim();
-  const eventShortDesc = eventForm
-    .querySelector(".eventShortDesc")
-    .value.trim();
-  const eventYear = eventForm.querySelector(".eventYear").value.trim();
-  const eventSpez = eventForm.querySelector(".eventSpez").value.trim();
-  const eventLink = eventForm.querySelector(".eventLink").value.trim();
+  const eventTitle = String(eventForm.querySelector(".eventTitle")?.value || "").trim();
+  const eventDesc = String(eventForm.querySelector(".eventDesc")?.value || "").trim();
+  const eventDate = String(eventForm.querySelector(".eventDate")?.value || "").trim();
+  const eventShortDesc = String(eventForm.querySelector(".eventShortDesc")?.value || "").trim();
+  const eventYear = String(eventForm.querySelector(".eventYear")?.value || "").trim();
+  const eventLink = String(eventForm.querySelector(".eventLink")?.value || "").trim();
+  const selectedFilters = gatherEventFormFilters();
+  const eventImages = gatherEventImageUrls();
 
-  if (!eventTitle) return;
+  if (eventImages === null) {
+    return;
+  }
+
+  if (!eventTitle || !eventDesc || !eventDate || !eventShortDesc || !eventYear) {
+    showFormError("Please fill all event fields before saving.");
+    return;
+  }
+
+  const descWordCount = countWords(eventDesc);
+  const shortDescWordCount = countWords(eventShortDesc);
+
+  if (descWordCount > 70) {
+    showFormError("Event description must be 70 words or fewer.");
+    return;
+  }
+
+  if (shortDescWordCount > 15) {
+    showFormError("Short description must be 15 words or fewer.");
+    return;
+  }
+
+  if (isNaN(Number(eventYear)) || !Number.isInteger(Number(eventYear))) {
+    showFormError("Please enter a valid numeric year for the event.");
+    return;
+  }
+  const parsedDate = new Date(eventDate);
+  if (isNaN(parsedDate.getTime())) {
+    showFormError("Please enter a valid event date.");
+    return;
+  }
+  if (eventLink && !isValidUrl(eventLink)) {
+    showFormError("Please enter a valid URL for the event link.");
+    return;
+  }
+
+  if (eventImages.length === 0) {
+    showFormError("Please add at least one image URL for the event.");
+    return;
+  }
 
   const newEvent = {
     title: eventTitle,
@@ -493,14 +1122,21 @@ saveEventButton.addEventListener("click", () => {
     date: eventDate,
     "short-desc": eventShortDesc,
     year: eventYear,
-    spez: eventSpez,
-    link: eventLink
+    filters: selectedFilters,
+    link: eventLink,
+    images: eventImages
   };
+
+  if (newEvent.filters.length > 0) {
+    newEvent.spez = newEvent.filters[0];
+  }
 
   eventData = [...eventData, newEvent];
   eventForm.classList.add("hidden");
   formContainer.classList.add("hidden");
   eventForm.reset();
+  clearEventFormFilters();
+  renderEventImageUrlInputs();
   renderEvents();
 });
 
@@ -537,7 +1173,11 @@ const renderNewEvents = () => {
   newEventList.innerHTML = "";
   newEventData.forEach((event, index) => {
     const eventItem = document.createElement("li");
-    eventItem.innerHTML = `<img src="${event.img1}" alt="Img1" style="width:50px;"> <img src="${event.img2}" alt="Img2" style="width:50px;">`;
+    eventItem.innerHTML = `<img src="${normalizeCloudinaryUrl(
+      event.img1
+    )}" loading="lazy" alt="Img1" style="width:50px;"> <img src="${normalizeCloudinaryUrl(
+      event.img2
+    )}" loading="lazy" alt="Img2" style="width:50px;">`;
     const deleteNewEventButton = document.createElement("button");
     deleteNewEventButton.type = "button";
     deleteNewEventButton.textContent = "Delete";
@@ -562,11 +1202,18 @@ saveNewEventButton.addEventListener("click", () => {
   const img1 = newEventForm.querySelector(".newEventImg1").value.trim();
   const img2 = newEventForm.querySelector(".newEventImg2").value.trim();
 
-  if (!img1 || !img2) return;
+  if (!img1 || !img2) {
+    showFormError("Please provide both new event image URLs.");
+    return;
+  }
+  if (!isValidUrl(img1) || !isValidUrl(img2)) {
+    showFormError("Please enter valid URLs for both new event images.");
+    return;
+  }
 
   const newEvent = {
-    img1: img1,
-    img2: img2
+    img1: normalizeCloudinaryUrl(img1),
+    img2: normalizeCloudinaryUrl(img2)
   };
 
   newEventData = [...newEventData, newEvent];
@@ -603,14 +1250,22 @@ const renderProducts = () => {
 
     const compTitle = document.createElement("h2");
     compTitle.textContent = item.title;
+
+    const conditionsSection = document.createElement("div");
+    conditionsSection.className = "conditions-section";
+    conditionsSection.style.display = "none";
+
     const conditionsList = document.createElement("ul");
-    conditionsList.style.display = "none"; // Hidden by default
-    item.conditions.forEach(condition => {
+    conditionsList.className = "conditions-list";
+    (item.conditions || []).forEach(condition => {
       const conditionItem = document.createElement("li");
-      conditionItem.textContent = condition.condName;
+      conditionItem.textContent = condition.conditionName || "";
       const deleteConditionButton = document.createElement("button");
       deleteConditionButton.textContent = "Delete Condition";
-      deleteConditionButton.setAttribute("data-cond-name", condition.condName);
+      deleteConditionButton.setAttribute(
+        "data-cond-name",
+        condition.conditionName || ""
+      );
       deleteConditionButton.setAttribute(
         "data-product-id",
         item.id ? item.id : 1
@@ -620,21 +1275,51 @@ const renderProducts = () => {
         const productId = deleteConditionButton.getAttribute("data-product-id");
         const product = productsData.find(p => p.id == productId);
         if (product) {
-          product.conditions = product.conditions.filter(
-            c => c.condName !== condName
-          );
+          product.conditions = (product.conditions || [])
+            .filter(c => c.conditionName !== condName);
           renderProducts();
         }
       });
       conditionItem.appendChild(deleteConditionButton);
       conditionsList.appendChild(conditionItem);
     });
-    const showConditionsButton = document.createElement("button");
-    showConditionsButton.textContent = "Show Conditions";
-    showConditionsButton.addEventListener("click", () => {
-      conditionsList.style.display =
-        conditionsList.style.display === "none" ? "block" : "none";
+
+    const conditionsV2List = document.createElement("ul");
+    conditionsV2List.className = "conditionsV2-list";
+    (item.conditionsV2 || []).forEach(cv2 => {
+      const li = document.createElement("li");
+      li.textContent = `${cv2.name || ""} ${cv2.date
+        ? "(" + cv2.date + ")"
+        : ""}`;
+      const del = document.createElement("button");
+      del.type = "button";
+      del.textContent = "Delete V2";
+      del.addEventListener("click", () => {
+        item.conditionsV2 = (item.conditionsV2 || [])
+          .filter(c => c.id !== cv2.id);
+        renderProducts();
+      });
+      li.appendChild(del);
+      conditionsV2List.appendChild(li);
     });
+
+    if (conditionsList.children.length > 0) {
+      conditionsSection.appendChild(conditionsList);
+    }
+    if (conditionsV2List.children.length > 0) {
+      conditionsSection.appendChild(conditionsV2List);
+    }
+
+    const showConditionsButton = document.createElement("button");
+    showConditionsButton.textContent = "Show Medical clinical cases";
+    showConditionsButton.addEventListener("click", () => {
+      const isHidden = conditionsSection.style.display === "none";
+      conditionsSection.style.display = isHidden ? "block" : "none";
+      showConditionsButton.textContent = isHidden
+        ? "Hide Medical clinical cases"
+        : "Show Medical clinical cases";
+    });
+
     const editProductButton = document.createElement("button");
     editProductButton.textContent = "Edit Product";
     editProductButton.id = item.id;
@@ -659,13 +1344,36 @@ const renderProducts = () => {
       formContainer.classList.remove("hidden");
       submitConditionButton.setAttribute("data-product-id", item.id);
     });
-    compCard.appendChild(conditionsButton);
-    compCard.appendChild(showConditionsButton);
-    compCard.appendChild(deleteProductButton);
-    compCard.appendChild(editProductButton);
+    // Button for adding Condition V2
+    const conditionsV2Button = document.createElement("button");
+    conditionsV2Button.textContent = "add condition v2";
+    conditionsV2Button.setAttribute("data-product-id", item.id);
+    conditionsV2Button.addEventListener("click", () => {
+      if (!conditionV2FormEl) return;
+      conditionV2FormEl.classList.remove("hidden");
+      formContainer.classList.remove("hidden");
+      const pid = conditionV2FormEl.querySelector(".condV2ProductId");
+      if (pid) pid.value = item.id;
+      const images = conditionV2FormEl.querySelector(".condV2Images");
+      if (images && images.children.length === 0)
+        images.appendChild(createCondV2ImageRow());
+    });
 
-    compCard.appendChild(conditionsList);
-    compCard.appendChild(compTitle);
+    const actionsWrapper = document.createElement("div");
+    actionsWrapper.className = "compCard-actions";
+    actionsWrapper.appendChild(conditionsButton);
+    actionsWrapper.appendChild(conditionsV2Button);
+    actionsWrapper.appendChild(showConditionsButton);
+    actionsWrapper.appendChild(deleteProductButton);
+    actionsWrapper.appendChild(editProductButton);
+
+    const contentWrapper = document.createElement("div");
+    contentWrapper.className = "compCard-content";
+    contentWrapper.appendChild(compTitle);
+    contentWrapper.appendChild(conditionsSection);
+
+    compCard.appendChild(actionsWrapper);
+    compCard.appendChild(contentWrapper);
     fullView.appendChild(compCard);
   });
 };
@@ -728,7 +1436,8 @@ function loadAndDisplayDataForUser() {
 
             let cardImageImg = document.createElement("img");
 
-            cardImageImg.setAttribute("src", val.image);
+            cardImageImg.setAttribute("src", normalizeCloudinaryUrl(val.image));
+            cardImageImg.setAttribute("loading", "lazy");
 
             cardImage.appendChild(cardImageImg);
 
@@ -791,14 +1500,6 @@ function loadAndDisplayDataForUser() {
             cardContent.appendChild(cardEmail);
 
             // start button
-
-            let cardButton = document.createElement("button");
-
-            cardButton.classList.add("card__btn");
-
-            cardButton.innerHTML = `VIEW MORE`;
-
-            cardContent.appendChild(cardButton);
 
             card.appendChild(cardContent);
           }
@@ -896,7 +1597,7 @@ function loadAndDisplayDataForUser() {
                 const tagAttr = m.tag
                   ? `data-tag="${m.tag}"`
                   : `data-tag="management member"`;
-                const img = m.image || "";
+                const img = normalizeCloudinaryUrl(m.image || "");
                 const title = m.title || "";
                 const name = m.name || "";
                 const text = m.text || "";
@@ -904,7 +1605,7 @@ function loadAndDisplayDataForUser() {
                 const email = m.email || "";
                 return `
                   <div class="card swiper-slide" ${tagAttr}>
-                    <div class="card__image"><img src="${img}" alt="${name}"></div>
+                    <div class="card__image"><img src="${img}" loading="lazy" alt="${name}"></div>
                     <div class="card__content">
                       <span class="card__title">${title}</span>
                       <span class="card__name">${name}</span>
@@ -983,31 +1684,59 @@ function loadAndDisplayDataForUser() {
           let typesArr = [];
           let val;
           let type;
+
+          // helpers for capitalization and class-safe tokens
+          function capitalizeWord(w) {
+            if (!w) return w;
+            return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+          }
+
+          function capitalizeWords(s) {
+            return s.trim().split(/\s+/).map(capitalizeWord).join(" ");
+          }
+
+          // produce the class tokens to add to an element for a given type
+          // - single word -> [Capitalized]
+          // - exactly two words -> [Capitalized-Word\-CapitalizedWord]
+          // - more than two words -> [CapitalizedWord1, CapitalizedWord2, ...]
+          function getClassTokensFromType(s) {
+            if (!s || typeof s !== "string") return [];
+            const parts = s.trim().split(/\s+/);
+            if (parts.length === 1) return [capitalizeWord(parts[0])];
+            if (parts.length === 2)
+              return [
+                `${capitalizeWord(parts[0])}-${capitalizeWord(parts[1])}`
+              ];
+            return parts.map(capitalizeWord);
+          }
+
+          // build unique list of types as objects { display, value }
+          const seen = new Set();
           for (val of response) {
-            if (val.type.includes(",")) {
-              console.log(val.type);
-              val.type.split(",").forEach(el => {
-                if (!typesArr.includes(el)) {
-                  typesArr.push(el);
-                }
-              });
-            } else {
-              if (!typesArr.includes(val.type)) {
-                typesArr.push(val.type);
+            if (!val || !val.type) continue;
+            const rawTypes = val.type.includes(",")
+              ? val.type.split(",").map(t => t.trim())
+              : [val.type.trim()];
+            rawTypes.forEach(raw => {
+              if (!raw) return;
+              const display = capitalizeWords(raw);
+              const value = getClassTokensFromType(raw)[0];
+              if (!seen.has(value)) {
+                seen.add(value);
+                typesArr.push({ display, value });
               }
-            }
+            });
           }
 
           console.log(typesArr);
           function generateSelectOps() {
-            typesArr.forEach(el => {
+            const sel = document.querySelector(".section-options ul select");
+            if (!sel) return;
+            typesArr.forEach(item => {
               let selectOption = document.createElement("option");
-
-              selectOption.textContent = el;
-
-              document
-                .querySelector(".section-options ul select")
-                .appendChild(selectOption);
+              selectOption.textContent = item.display;
+              selectOption.value = item.value; // class-safe, capitalized
+              sel.appendChild(selectOption);
             });
           }
 
@@ -1024,11 +1753,13 @@ function loadAndDisplayDataForUser() {
             card.classList.add("all");
             console.log(val);
             if (val.type.includes(",")) {
-              val.type.split(",").forEach(el => {
-                card.classList.add(el.trim());
+              val.type.split(",").forEach(elRaw => {
+                const tokens = getClassTokensFromType(elRaw);
+                tokens.forEach(t => card.classList.add(t));
               });
             } else {
-              card.classList.add(val.type.trim());
+              const tokens = getClassTokensFromType(val.type);
+              tokens.forEach(t => card.classList.add(t));
             }
             // start product image
 
@@ -1038,9 +1769,11 @@ function loadAndDisplayDataForUser() {
 
             card.appendChild(productImagecon);
 
-            let productImage = document.createElement(contType2);
+            let productImage = document.createElement("img");
 
-            productImage.setAttribute("src", val.image);
+            productImage.setAttribute("src", normalizeCloudinaryUrl(val.image));
+
+            productImage.setAttribute("loading", "lazy");
 
             productImagecon.appendChild(productImage);
 
@@ -1052,7 +1785,7 @@ function loadAndDisplayDataForUser() {
 
             card.appendChild(productName);
 
-            let productNameText = document.createElement(contType);
+            let productNameText = document.createElement("div");
 
             productNameText.innerHTML = val.title;
 
@@ -1060,7 +1793,7 @@ function loadAndDisplayDataForUser() {
 
             // start product text
 
-            let productDes = document.createElement(contType);
+            let productDes = document.createElement("div");
 
             productDes.classList.add("product-text");
 
@@ -1162,6 +1895,7 @@ function loadAndDisplayDataForUser() {
         const moreProductName = document.querySelector(".moreProductName");
         const moreProductDesc = document.querySelector(".moreProductDesc p");
         const moreProductImage = document.querySelector(".moreProductDesc img");
+        if (moreProductImage) moreProductImage.setAttribute("loading", "lazy");
         const outerCond = document.querySelector(".outerCond");
         const outerCondImages1 = document.querySelectorAll(
           ".outerCondImages1 img"
@@ -1177,8 +1911,63 @@ function loadAndDisplayDataForUser() {
         let condImg;
         let val;
 
-        let choosenProduct;
+        //
         const viewMoreButton = document.querySelectorAll(".moreButton");
+        let showViewMoreProductSection = product => {
+          let choosenProductButton;
+          viewMoreButton.forEach(button => {
+            if (button.name == product) {
+              choosenProductButton = button;
+            }
+          });
+          bringProductData(product, choosenProductButton);
+          hideEveryThingElse([moreMainView]);
+          moreMainView.classList.remove("hidden");
+          moreMainView.style.left = "0";
+          goBackButton.classList.remove("hidden");
+          window.scrollTo({
+            top: 0,
+            behavior: "smooth" // optional
+          });
+        };
+        const slugifyProductTitle = title =>
+          String(title || "")
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/(^-|-$)/g, "");
+
+        const openProductFromHash = () => {
+          const hash = window.location.hash || "";
+          if (!hash.startsWith("#product-")) return;
+
+          const productSlug = hash
+            .replace(/^#product-/, "")
+            .toLowerCase()
+            .trim();
+
+          if (!data || !Array.isArray(data.products)) return;
+
+          const matchedProduct = data.products.find(product => {
+            const titleSlug = slugifyProductTitle(product.title);
+            return titleSlug === productSlug;
+          });
+
+          if (matchedProduct) {
+            showViewMoreProductSection(matchedProduct.title);
+          }
+        };
+
+        window.addEventListener("DOMContentLoaded", () => {
+          console.log("Current hash:", window.location.hash);
+          openProductFromHash();
+        });
+
+        window.addEventListener("hashchange", () => {
+          openProductFromHash();
+        });
+        let choosenProduct;
+
         viewMoreButton.forEach(button => {
           button.addEventListener("click", () => {
             hideEveryThingElse([moreMainView]);
@@ -1186,6 +1975,10 @@ function loadAndDisplayDataForUser() {
             moreMainView.classList.remove("hidden");
             moreMainView.style.left = "0";
             goBackButton.classList.remove("hidden");
+            window.location.hash = `#product-${button.name.replace(
+              /\s+/g,
+              "-"
+            )}`;
             window.scrollTo({
               top: 0,
               behavior: "smooth" // optional
@@ -1205,6 +1998,7 @@ function loadAndDisplayDataForUser() {
           //removing the hidden from main elements
           document.querySelector("header").classList.remove("hidden");
           document.querySelector(".slide-nav").classList.remove("hidden");
+          document.querySelector(".gtranslate_wrapper").classList.remove("hidden")
           //
         };
 
@@ -1215,120 +2009,126 @@ function loadAndDisplayDataForUser() {
               choosenProduct = val;
               moreProductName.innerText = choosenProduct.title;
               moreProductDesc.innerText = choosenProduct.longDesc;
-              moreProductImage.src = choosenProduct.prodImage;
+              moreProductImage.src = normalizeCloudinaryUrl(
+                choosenProduct.prodImage
+              );
 
-              if (choosenProduct.conditions.length >= 2) {
-                for (let i = 0; i < 2; i++) {
-                  let outerCond = document.createElement("div");
-                  outerCond.classList.add("outerCond");
-                  let outerCondName = document.createElement("div");
-                  outerCondName.classList.add("outerCondName1");
-                  outerCondName.innerText =
-                    choosenProduct.conditions[i].condName;
-                  outerCond.appendChild(outerCondName);
-                  outerCondGallery.appendChild(outerCond);
-                  let outerCondImages = document.createElement("div");
-                  outerCondImages.classList.add("outerCondImages1");
-                  for (val of choosenProduct.conditions[i].images) {
-                    let image = document.createElement("img");
-                    image.loading = "lazy";
-                    image.alt = "condImage";
-                    image.src = val;
-                    outerCondImages.appendChild(image);
-                  }
-                  outerCond.appendChild(outerCondImages);
-                  outerCondGallery.appendChild(outerCond);
-                }
+              // Simplified conditions display: each condition has { conditionName, conditionLink }
+              const conds = choosenProduct.conditions || [];
+              const condsV2 = choosenProduct.conditionsV2 || [];
+              // clear previous gallery
+              if (outerCondGallery) outerCondGallery.innerHTML = "";
 
-                //
-                let viewAllCondButton = document.createElement("button");
+              if (conds.length > 0 || condsV2.length > 0) {
+                // button to view full list of conditions
+                const viewAllCondButton = document.createElement("button");
                 viewAllCondButton.classList.add("viewMoreCondButton");
-                viewAllCondButton.textContent = "see more conditions";
+                viewAllCondButton.textContent = "see more Medical clinical cases";
                 viewAllCondButton.type = "button";
                 outerCondGallery.appendChild(viewAllCondButton);
+
                 viewAllCondButton.addEventListener("click", () => {
-                  // Build the all-conditions view from scratch to avoid duplicates
+                  // Build the all-conditions view from scratch
                   allCondMainView.innerHTML = "";
 
-                  // Back button to return to the first layer (`moreMainView`)
                   const backToMoreBtn = document.createElement("button");
                   backToMoreBtn.type = "button";
                   backToMoreBtn.classList.add("goBackToMoreButton");
                   backToMoreBtn.textContent = "go back to product description";
 
-                  for (val of data.products) {
-                    if (val.title === choosenProduct.title) {
-                      // filling the header of the all conditions section
-                      let conditionsHeader = document.createElement("h1");
-                      conditionsHeader.classList.add("conditions-header");
-                      conditionsHeader.innerText = `All conditions of ${choosenProduct.title}`;
-                      allCondMainView.appendChild(conditionsHeader);
-                      for (cond of choosenProduct.conditions) {
-                        let condHolder = document.createElement("div");
-                        condHolder.classList.add("allCond");
+                  // header
+                  const conditionsHeader = document.createElement("h1");
+                  conditionsHeader.classList.add("conditions-header");
+                  conditionsHeader.innerText = `All Medical clinical casesof ${choosenProduct.title}`;
+                  allCondMainView.appendChild(conditionsHeader);
 
-                        // adding the condition Name
-                        let condName = cond.condName;
-                        let condNameDateHolder = document.createElement("div");
-                        let condNameHolder = document.createElement("h2");
-                        condNameHolder.classList.add("allCondName");
-                        condNameHolder.innerText = condName;
-                        // adding the condition date
-                        condNameDateHolder.appendChild(condNameHolder);
-                        let condDate = cond.date;
-                        let condDateHolder = document.createElement("div");
-                        condDateHolder.classList.add("allCondDate");
-                        condDateHolder.innerText = condDate;
-                        condNameDateHolder.appendChild(condDateHolder);
-                        //appending
-                        condHolder.appendChild(condNameDateHolder);
-                        // adding the condition images
-                        let condImages = cond.images;
-                        let allCondImagesHolder = document.createElement("div");
-                        allCondImagesHolder.classList.add("allCondImages");
-                        for (condImg of condImages) {
-                          let condImgHolder = document.createElement("img");
-                          condImgHolder.src = condImg;
-                          condImgHolder.loading = "lazy";
-                          condImgHolder.alt = "condition Image";
-                          allCondImagesHolder.appendChild(condImgHolder);
-                        }
-                        condHolder.appendChild(allCondImagesHolder);
-                        // adding condition description
-                        let condDesc = cond.conditionDesc;
-                        let condDescHolder = document.createElement("p");
-                        condDescHolder.classList.add("allCondDesc");
-                        condDescHolder.innerText = condDesc;
-                        condHolder.appendChild(condDescHolder);
-                        allCondMainView.appendChild(condHolder);
-                      }
+                  const list = document.createElement("div");
+                  list.classList.add("conditions-list");
+
+                  // Each row: condition text + Open button
+                  conds.forEach(c => {
+                    const row = document.createElement("div");
+                    row.classList.add("condition-row");
+
+                    const nameSpan = document.createElement("span");
+                    nameSpan.classList.add("condition-text");
+                    nameSpan.textContent = c.conditionName || "";
+
+                    const openBtn = document.createElement("button");
+                    openBtn.classList.add("condition-open-button");
+                    openBtn.type = "button";
+                    openBtn.textContent = "Open";
+                    openBtn.addEventListener("click", () => {
+                      const link = c.conditionLink || "#";
+                      window.open(link, "_blank", "noopener,noreferrer");
+                    });
+
+                    row.appendChild(nameSpan);
+                    row.appendChild(openBtn);
+                    list.appendChild(row);
+                  });
+
+                  allCondMainView.classList.remove("hidden");
+
+                  list.classList.add("condition-v2-list");
+
+                  condsV2.forEach(c => {
+                    const card = document.createElement("div");
+                    card.classList.add("condition-v2-card");
+                    const title = document.createElement("h2");
+                    title.textContent = c.name || "";
+                    card.appendChild(title);
+                    if (c.date) {
+                      const timeEl = document.createElement("time");
+                      timeEl.setAttribute("datetime", c.date);
+                      timeEl.textContent = c.date;
+                      card.appendChild(timeEl);
                     }
-                  }
-                  allCondMainView.appendChild(backToMoreBtn);
-                  // Show second layer, hide first layer
+                    if (c.text) {
+                      const p = document.createElement("p");
+                      p.textContent = c.text;
+                      card.appendChild(p);
+                    }
+                    if (Array.isArray(c.images) && c.images.length) {
+                      const gallery = document.createElement("div");
+                      gallery.classList.add("condition-v2-gallery");
+                      c.images.forEach(img => {
+                        const fig = document.createElement("figure");
+                        const im = document.createElement("img");
+                        im.src = normalizeCloudinaryUrl(img.url || "");
+                        im.loading = "lazy";
+                        im.decoding = "async";
+                        im.alt =
+                          img.alt ||
+                          `${choosenProduct.title} - ${c.name || ""}`;
+                        fig.appendChild(im);
+                        gallery.appendChild(fig);
+                      });
+                      card.appendChild(gallery);
+                    }
+                    list.appendChild(card);
+                  });
+
+                  allCondMainView.appendChild(list);
                   allCondMainView.classList.remove("hidden");
                   moreMainView.classList.add("hidden");
 
-                  // Attach listener to the back button we just created
                   backToMoreBtn.addEventListener("click", () => {
                     allCondMainView.classList.add("hidden");
-                    // clear content so re-opening rebuilds cleanly
                     allCondMainView.innerHTML = "";
-                    // show the first layer again
                     moreMainView.classList.remove("hidden");
                   });
+
+                  allCondMainView.appendChild(backToMoreBtn);
                 });
-                button.classList.contains("hidden")
-                  ? button.classList.remove("hidden")
-                  : "";
+                // ensure view button is visible
+                if (button.classList.contains("hidden"))
+                  button.classList.remove("hidden");
               } else {
-                outerCondImages1.forEach(el => {
-                  el.classList.add("hidden");
-                });
-                outerCondImages2.forEach(el => {
-                  el.classList.add("hidden");
-                });
+                // no conditions: clear gallery or hide it
+                if (outerCondGallery) outerCondGallery.innerHTML = "";
               }
+              // Render Conditions V2 (rich conditions with images/text)
             }
           }
         };
@@ -1381,15 +2181,121 @@ function loadAndDisplayDataForUser() {
 
         let smallEventArr = [];
 
-        let beforButton = document.querySelector(".spans #befor");
+        let beforButton = document.querySelector(".spans #before, .spans #befor");
 
         let afterbutton = document.querySelector(".spans #after");
 
         let eventMainCont = document.querySelector(".Events-cont");
+        let decorationText = document.querySelector(".decoration-text");
 
         let addAncherTobutton = document.querySelectorAll(
           ".eventCard div:nth-child(2) button"
         );
+
+        let openEventImageModal = (imageUrl, title) => {
+          if (!imageUrl) return;
+
+          let overlay = document.querySelector(".event-image-lightbox");
+          if (!overlay) {
+            overlay = document.createElement("div");
+            overlay.className = "event-image-lightbox";
+            overlay.innerHTML = `
+              <button type="button" class="event-image-lightbox__close" aria-label="Close image">×</button>
+              <div class="event-image-lightbox__frame">
+                <img src="" alt="" />
+              </div>
+            `;
+            document.body.appendChild(overlay);
+          }
+
+          const img = overlay.querySelector("img");
+          const closeButton = overlay.querySelector(".event-image-lightbox__close");
+          if (img) {
+            img.src = normalizeCloudinaryUrl(imageUrl);
+            img.alt = title || "Event image";
+          }
+
+          const closeModal = () => {
+            overlay.classList.remove("show");
+            document.body.classList.remove("event-lightbox-open");
+          };
+
+          closeButton?.addEventListener("click", closeModal, { once: true });
+          overlay.addEventListener(
+            "click",
+            event => {
+              if (event.target === overlay) {
+                closeModal();
+              }
+            },
+            { once: true }
+          );
+
+          document.body.classList.add("event-lightbox-open");
+          overlay.classList.add("show");
+        };
+
+        let getEventImages = event => {
+          if (!event) return [];
+          const candidates = [
+            Array.isArray(event.images) ? event.images : null,
+            Array.isArray(event.image) ? event.image : null,
+            Array.isArray(event.img) ? event.img : null
+          ].filter(Boolean);
+
+          if (candidates.length > 0) {
+            return candidates.flat().filter(Boolean);
+          }
+
+          return [event.img1, event.img2, event.imageUrl, event.imageurl]
+            .filter(Boolean);
+        };
+
+        let renderEventGallery = event => {
+          if (!decorationText) return;
+
+          const images = getEventImages(event);
+
+          decorationText.innerHTML = "";
+          decorationText.style.display = "flex";
+          decorationText.style.flexDirection = "column";
+          decorationText.style.gap = "10px";
+
+          
+   
+          if (images.length === 0) {
+            const emptyText = document.createElement("p");
+            emptyText.textContent = "No images available for this event.";
+            decorationText.appendChild(emptyText);
+            return;
+          }
+
+          const gallery = document.createElement("div");
+          gallery.className = "event-gallery-grid";
+         
+
+          images.forEach(imageUrl => {
+            const thumbButton = document.createElement("button");
+            thumbButton.type = "button";
+            thumbButton.className = "event-gallery-thumb";
+            thumbButton.addEventListener("click", () => {
+              openEventImageModal(imageUrl, event?.title || "Event image");
+            });
+
+            const image = document.createElement("img");
+            image.src = normalizeCloudinaryUrl(imageUrl);
+            image.alt = `${event?.title || "Event"} image`;
+            image.loading = "lazy";
+            image.style.width = "100%";
+            image.style.height = "70px";
+            image.style.objectFit = "cover";
+            image.style.borderRadius = "6px";
+            thumbButton.appendChild(image);
+            gallery.appendChild(thumbButton);
+          });
+
+          decorationText.appendChild(gallery);
+        };
 
         /*functions */
         let resetClick = () => {
@@ -1400,120 +2306,156 @@ function loadAndDisplayDataForUser() {
               : ele;
           });
         };
-        /*control center:function make the controles (< / >) and generate the card function */
+        /*control center:function make the controls and generate the card pages */
+        let eventPageIndex = 0;
+        let eventPageGroups = [];
+
+        let updateEventCarouselView = () => {
+          const track = document.querySelector(".cards-container .small-cont");
+          if (!track || !track.children.length) return;
+
+          const pages = Array.from(track.children);
+          pages.forEach((page, index) => {
+            page.classList.toggle("active", index === eventPageIndex);
+            page.classList.toggle("is-left", index < eventPageIndex);
+            page.classList.toggle("is-right", index > eventPageIndex);
+          });
+
+          const activePage = pages[eventPageIndex] || pages[0];
+          if (activePage) {
+            const height = Math.max(
+              activePage.scrollHeight || activePage.offsetHeight || 0,
+              360
+            );
+            track.style.height = `${height}px`;
+          }
+
+          if (beforButton) {
+            beforButton.classList.toggle("disabled", eventPageIndex === 0);
+          }
+          if (afterbutton) {
+            afterbutton.classList.toggle(
+              "disabled",
+              eventPageIndex >= eventPageGroups.length - 1
+            );
+          }
+        };
+
+        let createEventCard = (currentEvent, cardIndex) => {
+          let cardDiv = document.createElement("div");
+          cardDiv.classList.add("eventCard");
+          cardDiv.dataset.num = cardIndex;
+
+          let date = String(currentEvent?.date || "").split(" ");
+          let dateDiv = document.createElement("div");
+          dateDiv.classList.add("old-date");
+
+          let day = document.createElement("h1");
+          day.classList.add("day");
+          day.appendChild(document.createTextNode(date[0]));
+
+          let mounth = document.createElement("p");
+          mounth.appendChild(document.createTextNode(date[1]));
+          mounth.classList.add("mounth");
+
+          dateDiv.appendChild(day);
+          dateDiv.appendChild(mounth);
+          cardDiv.appendChild(dateDiv);
+
+          let secondDiv = document.createElement("div");
+          let title = document.createElement("h1");
+          title.classList.add("title");
+          title.append(document.createTextNode(currentEvent?.title || ""));
+
+          let eventText = document.createElement("P");
+          eventText.classList.add("event-text");
+          eventText.appendChild(
+            document.createTextNode(currentEvent?.["short-desc"] || "")
+          );
+
+          let eventButton = document.createElement("button");
+          eventButton.classList.add("event-button");
+          let buttonAn = document.createElement("a");
+          buttonAn.append(document.createTextNode("show more"));
+          eventButton.append(buttonAn);
+
+          eventButton.addEventListener("click", () => {
+            resetClick();
+            eventHeader.innerHTML = currentEvent?.title || "";
+            eventParagraph.innerHTML = currentEvent?.desc || "";
+            linkEvent.href = currentEvent?.link || "#";
+            dateDiv.classList.add("clicked");
+            renderEventGallery(currentEvent);
+            document.querySelector(".left-sid-cont #desc").scrollIntoView({
+              behavior: "smooth",
+              block: "start"
+            });
+          });
+
+          secondDiv.appendChild(title);
+          secondDiv.appendChild(eventText);
+          secondDiv.appendChild(eventButton);
+          cardDiv.appendChild(secondDiv);
+
+          return cardDiv;
+        };
+
+        let makeCard = arr => {
+          document.querySelector(".cards-container .small-cont")?.remove();
+
+          let evenTcontDiv = document.createElement("div");
+          evenTcontDiv.classList.add("small-cont");
+          evenTcontDiv.setAttribute("aria-live", "polite");
+
+          eventPageGroups = [];
+          for (let eventCounter = 0; eventCounter < arr.length; eventCounter += 3) {
+            const pageEvents = arr.slice(eventCounter, eventCounter + 3);
+            const pageDiv = document.createElement("div");
+            pageDiv.classList.add("small-cont__page");
+
+            pageEvents.forEach((currentEvent, index) => {
+              pageDiv.appendChild(
+                createEventCard(currentEvent, eventCounter + index)
+              );
+            });
+
+            evenTcontDiv.appendChild(pageDiv);
+            eventPageGroups.push(pageEvents);
+          }
+
+          cardCont.appendChild(evenTcontDiv);
+          eventPageIndex = 0;
+
+          requestAnimationFrame(() => {
+            updateEventCarouselView();
+            if (evenTcontDiv.querySelector(".event-button")) {
+              evenTcontDiv.querySelector(".event-button").click();
+            }
+          });
+        };
+
         let controlCenter = (num, arr) => {
-          let viewBort = 0;
           if (num === 0) {
             makeCard(arr);
           }
-          afterbutton.addEventListener("click", () => {
-            let Allcards = document.querySelector(
-              ".cards-container .small-cont"
-            ).children;
-            viewBort -= 320;
-            if (viewBort === -320 * Math.floor(arr.length / 3.1) - 320) {
-              viewBort = 0;
-              let usedStyle = `translateY(${viewBort}%)`;
-              Array.from(Allcards).forEach(ele => {
-                ele.style.transform = usedStyle;
-              });
-            }
+        };
 
-            let usedStyle = `translateY(${viewBort}%)`;
-            Array.from(Allcards).forEach(ele => {
-              ele.style.transform = usedStyle;
-            });
-          });
+        if (beforButton && afterbutton) {
           beforButton.addEventListener("click", () => {
-            let Allcards = document.querySelector(
-              ".cards-container .small-cont"
-            ).children;
-            if (viewBort === 0) {
-              viewBort = -320 * Math.floor(arr.length / 3.1);
-              let usedStyle = `translateY(${viewBort}%)`;
-              Array.from(Allcards).forEach(ele => {
-                ele.style.transform = usedStyle;
-              });
-            } else {
-              viewBort += 320;
+            if (eventPageIndex > 0) {
+              eventPageIndex -= 1;
+              updateEventCarouselView();
             }
-            let usedStyle = `translateY(${viewBort}%)`;
-
-            Array.from(Allcards).forEach(ele => {
-              ele.style.transform = usedStyle;
-            });
           });
-        };
-        /*control center end */
-        /*card maker start */
-        let makeCard = arr => {
-          document.querySelector(".cards-container .small-cont").remove();
-          let evenTcontDiv = document.createElement("div");
-          evenTcontDiv.classList.add("small-cont");
-          for (
-            let eventCounter = 0;
-            eventCounter < arr.length;
-            eventCounter++
-          ) {
-            let cardDiv = document.createElement("div");
-            cardDiv.classList.add("eventCard");
-            cardDiv.dataset.num = eventCounter;
-            /*start old-date html*/
-            let date = arr[eventCounter].date.split(" ");
-            let dateDiv = document.createElement("div");
-            dateDiv.classList.add("old-date");
-            let day = document.createElement("h1");
-            day.classList.add("day");
-            day.appendChild(document.createTextNode(date[0]));
-            let mounth = document.createElement("p");
-            mounth.appendChild(document.createTextNode(date[1]));
-            mounth.classList.add("mounth");
-            dateDiv.appendChild(day);
-            dateDiv.appendChild(mounth);
-            cardDiv.appendChild(dateDiv);
-            /*end old-date html*/
-            /*start info html*/
-            let secondDiv = document.createElement("div");
-            let title = document.createElement("h1");
-            title.classList.add("title");
-            title.append(document.createTextNode(arr[eventCounter].title));
-            let eventText = document.createElement("P");
-            eventText.classList.add("event-text");
-            eventText.appendChild(
-              document.createTextNode(arr[eventCounter]["short-desc"])
-            );
-            let eventButton = document.createElement("button");
 
-            let buttonAn = document.createElement("a");
-            buttonAn.append(document.createTextNode("show more"));
-            eventButton.append(buttonAn);
-            /*button click function start*/
-            eventButton.addEventListener("click", () => {
-              resetClick();
-              eventHeader.innerHTML = arr[eventCounter].title;
-              eventParagraph.innerHTML = arr[eventCounter].desc;
-              linkEvent.href = arr[eventCounter].link;
-              dateDiv.classList.add("clicked");
-              document.querySelector(".left-sid-cont #desc").scrollIntoView({
-                behavior: "smooth",
-                block: "start"
-              });
-            });
-
-            /*button click function end */
-            secondDiv.appendChild(title);
-            secondDiv.appendChild(eventText);
-            secondDiv.appendChild(eventButton);
-            cardDiv.appendChild(secondDiv);
-            /*end info html*/
-            evenTcontDiv.append(cardDiv);
-            cardCont.append(evenTcontDiv);
-            if (eventCounter === 0) {
-              eventButton.click();
+          afterbutton.addEventListener("click", () => {
+            if (eventPageIndex < eventPageGroups.length - 1) {
+              eventPageIndex += 1;
+              updateEventCarouselView();
             }
-          }
-        };
-        /*card maker end */
+          });
+        }
+        /*control center end */
 
         /*select maker start */
         let select = document.createElement("select");
@@ -1562,9 +2504,11 @@ function loadAndDisplayDataForUser() {
           let arrOfYear = ["all"];
           let arrOfSpez = ["all"];
           for (let i = 0; i < arr.length; i++) {
-            let spez = arr[i].spez;
-            arrOfSpez.push(spez);
-            let year = arr[i].year;
+            const filters = getEventFilters(arr[i]);
+            filters.forEach(filter => {
+              arrOfSpez.push(filter);
+            });
+            const year = arr[i].year;
             arrOfYear.push(year);
           }
           let setOfSpez = new Set(arrOfSpez);
@@ -1584,19 +2528,12 @@ function loadAndDisplayDataForUser() {
           let yearCond = document.querySelector(".select2").value;
           let filterdArr = [];
           for (let i = 0; i < arr.length; i++) {
-            if (typeCond !== "all" && yearCond !== "all") {
-              if (arr[i].spez === typeCond && arr[i].year === yearCond) {
-                filterdArr.push(arr[i]);
-              }
-            } else if (typeCond === "all" && yearCond !== "all") {
-              if (arr[i].year === yearCond) {
-                filterdArr.push(arr[i]);
-              }
-            } else if (typeCond !== "all" && yearCond === "all") {
-              if (arr[i].spez === typeCond) {
-                filterdArr.push(arr[i]);
-              }
-            } else if (typeCond === "all" && yearCond === "all") {
+            const eventFilters = getEventFilters(arr[i]);
+            const matchesFilter =
+              typeCond === "all" || eventFilters.includes(typeCond);
+            const matchesYear = yearCond === "all" || arr[i].year === yearCond;
+
+            if (matchesFilter && matchesYear) {
               filterdArr.push(arr[i]);
             }
           }
@@ -1650,18 +2587,21 @@ function loadAndDisplayDataForUser() {
           let newE = data.newEvents;
           if (Array.from(newE).length > 0) {
             newEvents.classList.remove("dis");
+            console.log(newE);
+            buttonMakerCont(Array.from(newE).length, Array.from(newE));
           } else {
             console.log("no events");
           }
-          buttonMakerCont(Array.from(newE).length, Array.from(newE));
         }
 
         let buttonMaker = (number, img) => {
           let button = document.createElement("button");
           button.append(document.createTextNode(`day ${number + 1}`));
           button.addEventListener("click", () => {
-            image[0].src = img.img1;
-            image[1].src = img.img2;
+            if (image[0]) image[0].setAttribute("loading", "lazy");
+            if (image[1]) image[1].setAttribute("loading", "lazy");
+            image[0].src = normalizeCloudinaryUrl(img.img1);
+            image[1].src = normalizeCloudinaryUrl(img.img2);
           });
           if (number === 0) {
             button.click();
