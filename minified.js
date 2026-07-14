@@ -1485,6 +1485,7 @@ function loadAndDisplayDataForUser() {
                 let condImg;
                 let val;
                 const viewMoreButton = document.querySelectorAll(".moreButton");
+                let choosenProduct;
                  let bringProductData = (product, button) => {
                     for (val of data.products) {
                         if (val.title === product) {
@@ -1629,7 +1630,7 @@ function loadAndDisplayDataForUser() {
                 window.addEventListener("hashchange", () => {
                     openProductFromHash();
                 });
-                let choosenProduct;
+                
                 viewMoreButton.forEach((button) => {
                     button.addEventListener("click", () => {
                         hideEveryThingElse([moreMainView]);
