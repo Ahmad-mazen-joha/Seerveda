@@ -1486,7 +1486,20 @@ function loadAndDisplayDataForUser() {
                 let val;
                 const viewMoreButton = document.querySelectorAll(".moreButton");
                 let choosenProduct;
-                 let bringProductData = (product, button) => {
+               
+                let hideEveryThingElse = (arrayOfNonHidden) => {
+                    let everyThing = document.body.children;
+                    Array.from(everyThing).forEach((el) => {
+                        el.classList.contains("hidden") ? "" : el.classList.add("hidden");
+                    });
+                    arrayOfNonHidden.forEach((el) => {
+                        el.classList.remove("hidden");
+                    });
+                    document.querySelector("header").classList.remove("hidden");
+                    document.querySelector(".slide-nav").classList.remove("hidden");
+                    document.querySelector(".gtranslate_wrapper").classList.remove("hidden");
+                };
+                let bringProductData = (product, button) => {
                     for (val of data.products) {
                         if (val.title === product) {
                             console.log("right");
@@ -1586,7 +1599,36 @@ function loadAndDisplayDataForUser() {
                         }
                     }
                 };
-               
+                goBackButton.addEventListener("click", () => {
+                    moreMainView.classList.add("hidden");
+                    if (!allCondMainView.classList.contains("hidden")) {
+                        allCondMainView.classList.add("hidden");
+                        allCondMainView.innerHTML = "";
+                    }
+                    const outerGallery = document.querySelector(".outerCondGallery");
+                    if (outerGallery) outerGallery.innerHTML = "";
+                    document.querySelectorAll(".hidden").forEach((el) => el.classList.remove("hidden"));
+                    moreMainView.classList.add("hidden");
+                    allCondMainView.classList.add("hidden");
+                    goBackButton.classList.add("hidden");
+                    overlayBackground.classList.add("hidden");
+                    loginSection.classList.add("hidden");
+                    adminPanel.classList.add("hidden");
+                    toast.classList.add("hidden");
+                    goBackButton.classList.add("hidden");
+                });
+                 viewMoreButton.forEach((button) => {
+                    button.addEventListener("click", () => {
+                        hideEveryThingElse([moreMainView]);
+                        bringProductData(button.name, button);
+                        moreMainView.classList.remove("hidden");
+                        moreMainView.style.left = "0";
+                        goBackButton.classList.remove("hidden");
+                        window.location.hash = `#product-${button.name.replace(/\s+/g, "-").toLowerCase()}`;
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                    });
+                });
+                
                 let showViewMoreProductSection = (product) => {
                     let choosenProductButton;
                     viewMoreButton.forEach((button) => {
@@ -1594,8 +1636,6 @@ function loadAndDisplayDataForUser() {
                             choosenProductButton = button;
                         }
                     });
-                    
-
                     bringProductData(product, choosenProductButton);
                     hideEveryThingElse([moreMainView]);
                     moreMainView.classList.remove("hidden");
@@ -1629,48 +1669,6 @@ function loadAndDisplayDataForUser() {
                 openProductFromHash();
                 window.addEventListener("hashchange", () => {
                     openProductFromHash();
-                });
-                
-                viewMoreButton.forEach((button) => {
-                    button.addEventListener("click", () => {
-                        hideEveryThingElse([moreMainView]);
-                        bringProductData(button.name, button);
-                        moreMainView.classList.remove("hidden");
-                        moreMainView.style.left = "0";
-                        goBackButton.classList.remove("hidden");
-                        window.location.hash = `#product-${button.name.replace(/\s+/g, "-").toLowerCase()}`;
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                    });
-                });
-                let hideEveryThingElse = (arrayOfNonHidden) => {
-                    let everyThing = document.body.children;
-                    Array.from(everyThing).forEach((el) => {
-                        el.classList.contains("hidden") ? "" : el.classList.add("hidden");
-                    });
-                    arrayOfNonHidden.forEach((el) => {
-                        el.classList.remove("hidden");
-                    });
-                    document.querySelector("header").classList.remove("hidden");
-                    document.querySelector(".slide-nav").classList.remove("hidden");
-                    document.querySelector(".gtranslate_wrapper").classList.remove("hidden");
-                };
-                goBackButton.addEventListener("click", () => {
-                    moreMainView.classList.add("hidden");
-                    if (!allCondMainView.classList.contains("hidden")) {
-                        allCondMainView.classList.add("hidden");
-                        allCondMainView.innerHTML = "";
-                    }
-                    const outerGallery = document.querySelector(".outerCondGallery");
-                    if (outerGallery) outerGallery.innerHTML = "";
-                    document.querySelectorAll(".hidden").forEach((el) => el.classList.remove("hidden"));
-                    moreMainView.classList.add("hidden");
-                    allCondMainView.classList.add("hidden");
-                    goBackButton.classList.add("hidden");
-                    overlayBackground.classList.add("hidden");
-                    loginSection.classList.add("hidden");
-                    adminPanel.classList.add("hidden");
-                    toast.classList.add("hidden");
-                    goBackButton.classList.add("hidden");
                 });
                 let eventCard = document.querySelectorAll(".eventCard");
                 let eventHeader = document.querySelector(".left-sid-cont h1");
